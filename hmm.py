@@ -45,8 +45,8 @@ Q2a) helper function to write to naive_output_probs.txt
 
     unseen token probability is not added
 '''
-def naive_output_probs():
-    with open("naive_output_probs.txt", 'w', encoding="utf-8") as outputfile:
+def output_probs_helper(in_output_probs_filename):
+    with open(in_output_probs_filename, 'w', encoding="utf-8") as outputfile:
         for tag, tag_value in label_tag_counter.items():
             for token, token_value in label_tag_token[tag].items():
                 prob = (token_value + delta) / (tag_value + delta * (total_num_words + 1))
@@ -60,7 +60,7 @@ Q2c) accuracy = 908/1378 = 0.6589259796806967
 '''
 def naive_predict(in_output_probs_filename, in_test_filename, out_prediction_filename):
 
-    naive_output_probs()
+    output_probs_helper(in_output_probs_filename)
 
     label_tag_prob = defaultdict(lambda: defaultdict(float)) #dict where {token: {tag: prob}} using naive_output_probs.txt
     most_likely_tag_for_unseen_tokens = max(unseen_token_tag_prob, key=unseen_token_tag_prob.get)
@@ -132,15 +132,157 @@ def naive_predict2(in_output_probs_filename, in_train_filename, in_test_filename
                         tagoutputfile.write(f"{most_likely_tag}\n")
                     else:
                         tagoutputfile.write(f"{most_likely_tag_unseen_token}\n")
-    pass
+
+'''
+Q4a) Considering START and STOP state for trans_probs.txt
+'''
+
+def vitterbi_helper(in_output_probs_filename, in_trans_probs_filename):
+    output_probs_helper(in_output_probs_filename)
+    trans_dict = defaultdict(lambda: defaultdict(float))
+    with open("twitter_train.txt", "r", encoding="utf-8") as testdata:
+        with open(in_trans_probs_filename, "w", encoding="utf-8") as trans_probs:
+                #first line only
+                tag_i = "START"
+                tag_j = testdata.readline().strip().split("\t")[1]
+                trans_dict[tag_i][tag_j] = 1
+
+                tweet_counter = 0
+
+                for line in testdata:
+                    #for all lines until second last
+                    if not line.isspace(): #transition from one state to another
+                        if tag_j == "STOP" : #if previous line was a blank
+                            tag_j = "START"
+                        tag_i = tag_j
+                        tag_j = line.strip().split("\t")
+                        if len(tag_j) == 1: #end of test data reached
+                            break 
+                        tag_j = tag_j[1]
+                        trans_dict[tag_i][tag_j] += 1
+                    else: #transition from one state to STOP state
+                        tag_i = tag_j
+                        tag_j = "STOP"
+                        trans_dict[tag_i][tag_j] += 1
+                        tweet_counter += 1
+
+                print(tweet_counter)
+
+                label_tag_counter["START"] = tweet_counter
+                label_tag_counter["STOP"] = tweet_counter
+            
+                for tag_i, inner_dict in trans_dict.items():
+                    for tag_j, count in inner_dict.items():
+                        prob = (count + delta)/(label_tag_counter[tag_i] + delta * (total_num_words + 1)) #smoothing formula where delta = 1
+                        trans_probs.write(f"{tag_i}\t{tag_j}\t{prob}\n")
+                      
+'''
+Q4b) accuracy = 1034/1378 = 0.7503628447024674
+'''
+def viterbi_predict(in_tags_filename, in_trans_probs_filename, in_output_probs_filename, in_test_filename,
+                    out_predictions_filename):
+    vitterbi_helper(in_output_probs_filename, in_trans_probs_filename)
+
+    output_probs_dict = defaultdict(lambda: defaultdict(float))
+    trans_probs_dict = defaultdict(lambda: defaultdict(float))
+
+    with open(in_output_probs_filename, 'r', encoding="utf-8") as probinputfile:
+        for line in probinputfile:
+            tag, token, prob = line.strip().split('\t')
+            output_probs_dict[token][tag] = float(prob)
+    
+    with open(in_trans_probs_filename, "r", encoding="utf-8") as transinputfile:
+        for line in transinputfile:
+            tag_i, tag_j, prob = line.strip().split("\t")
+            trans_probs_dict[tag_i][tag_j] = float(prob)
+    
+    with open(in_tags_filename, "r", encoding="utf-8") as tagsfile:
+        tag_list = tagsfile.read().split()
+    
+    with open(in_test_filename, "r", encoding="utf-8") as testdata:
+        with open(out_predictions_filename, "w", encoding="utf-8") as outputfile:
+            pi = defaultdict(lambda: defaultdict(float))
+            BP = defaultdict(lambda: defaultdict(float))
+            tokens = []
+
+            for line in testdata:
+                if not line.isspace(): #gathering all tokens of one tweet in a list
+                    tokens.append(line.strip())
+                else: #when the end of the tweet is reached
+                    #range(0, 3 + 1)
+                    for index in range(0, len(tokens) + 1): #processing all the words in the tweet
+                        if index <= len(tokens) - 1: #index <= 3-1
+                            token = tokens[index]
+                            trans_prob = 0
+                            output_prob = 0
+                            if index == 0: #for the first word of the tweet
+                                for tag_j in tag_list:
+                                    if tag_j in trans_probs_dict["START"]:
+                                        trans_prob = trans_probs_dict["START"][tag_j]
+                                    else:
+                                        trans_prob = delta / (label_tag_counter["START"] + delta * (total_num_words + 1))
+                                    if token in output_probs_dict:
+                                        output_prob = output_probs_dict[token][tag_j]
+                                    else:
+                                        output_prob = delta / (label_tag_counter[tag_j] + delta * (total_num_words + 1))
+                                    prob = trans_prob * output_prob
+                                    pi[index + 1][tag_j] = prob
+                                    BP[index + 1][tag_j] = "*"
+
+                            else: #for every other word in between including last word
+                                for tag_j in tag_list:
+                                    find_max = defaultdict(float)
+                                    for tag_i in tag_list:
+                                        prev_prob = pi[index][tag_i]
+                                        if tag_j in trans_probs_dict[tag_i]:
+                                            trans_prob = trans_probs_dict[tag_i][tag_j]
+                                        else:
+                                            trans_prob = delta / (label_tag_counter[tag_i] + delta * (total_num_words + 1))
+                                        if token in output_probs_dict:
+                                            output_prob = output_probs_dict[token][tag_j]
+                                        else:
+                                            output_prob = delta / (label_tag_counter[tag_j] + delta * (total_num_words + 1))
+                                        prob = prev_prob * trans_prob * output_prob
+                                        find_max[tag_i] = prob
+                                    max_tag_i = max(find_max, key = find_max.get)
+                                    max_prob = find_max[max_tag_i]
+                                    pi[index + 1][tag_j] = max_prob
+                                    BP[index + 1][tag_j] = max_tag_i
+                        
+                        else: #for the stop state
+                            find_max = defaultdict(float)
+                            for tag_i in tag_list:
+                                prev_prob = pi[index][tag_i]
+                                if "STOP" in trans_probs_dict[tag_i]:
+                                    trans_prob = trans_probs_dict[tag_i]["STOP"]
+                                else:
+                                    trans_prob = delta / (label_tag_counter[tag_i] + delta * (total_num_words + 1))
+                                prob = prev_prob * trans_prob
+                                find_max[tag_i] = prob
+                            final_BP = max(find_max, key=find_max.get)
+                            max_prob = find_max[final_BP]
+
+                            sequence = []
+                            sequence.append(final_BP)
+                            for i in reversed(range(1, index + 1)):
+                                tag = BP[i][final_BP]
+                                if tag == "*":
+                                    continue
+                                sequence.append(tag)
+                                final_BP = tag
+                            sequence.reverse()
+                            for tag in sequence:
+                                outputfile.write(f"{tag}\n")
+                            outputfile.write("\n")
+
+                            pi = defaultdict(lambda: defaultdict(float)) #reset
+                            BP = defaultdict(lambda: defaultdict(float)) #reset
+                            tokens = [] #reset
+
 
 '''
 to be done
 '''
-def viterbi_predict(in_tags_filename, in_trans_probs_filename, in_output_probs_filename, in_test_filename,
-                    out_predictions_filename):
-    pass
-
 def viterbi_predict2(in_tags_filename, in_trans_probs_filename, in_output_probs_filename, in_test_filename,
                      out_predictions_filename):
     pass
@@ -180,25 +322,25 @@ def run():
     in_test_filename = f'{ddir}/twitter_dev_no_tag.txt'
     in_ans_filename  = f'{ddir}/twitter_dev_ans.txt'
 
-    naive_prediction_filename = f'{ddir}/naive_predictions.txt'
-    naive_predict(naive_output_probs_filename, in_test_filename, naive_prediction_filename)
-    correct, total, acc = evaluate(naive_prediction_filename, in_ans_filename)
-    print(f'Naive prediction accuracy:     {correct}/{total} = {acc}')
+    # naive_prediction_filename = f'{ddir}/naive_predictions.txt'
+    # naive_predict(naive_output_probs_filename, in_test_filename, naive_prediction_filename)
+    # correct, total, acc = evaluate(naive_prediction_filename, in_ans_filename)
+    # print(f'Naive prediction accuracy:     {correct}/{total} = {acc}')
 
-    naive_prediction_filename2 = f'{ddir}/naive_predictions2.txt'
-    naive_predict2(naive_output_probs_filename, in_train_filename, in_test_filename, naive_prediction_filename2)
-    correct, total, acc = evaluate(naive_prediction_filename2, in_ans_filename)
-    print(f'Naive prediction2 accuracy:    {correct}/{total} = {acc}')
+    # naive_prediction_filename2 = f'{ddir}/naive_predictions2.txt'
+    # naive_predict2(naive_output_probs_filename, in_train_filename, in_test_filename, naive_prediction_filename2)
+    # correct, total, acc = evaluate(naive_prediction_filename2, in_ans_filename)
+    # print(f'Naive prediction2 accuracy:    {correct}/{total} = {acc}')
 
-    # trans_probs_filename =  f'{ddir}/trans_probs.txt'
-    # output_probs_filename = f'{ddir}/output_probs.txt'
+    trans_probs_filename =  f'{ddir}/trans_probs.txt'
+    output_probs_filename = f'{ddir}/output_probs.txt'
 
-    # in_tags_filename = f'{ddir}/twitter_tags.txt'
-    # viterbi_predictions_filename = f'{ddir}/viterbi_predictions.txt'
-    # viterbi_predict(in_tags_filename, trans_probs_filename, output_probs_filename, in_test_filename,
-    #                 viterbi_predictions_filename)
-    # correct, total, acc = evaluate(viterbi_predictions_filename, in_ans_filename)
-    # print(f'Viterbi prediction accuracy:   {correct}/{total} = {acc}')
+    in_tags_filename = f'{ddir}/twitter_tags.txt'
+    viterbi_predictions_filename = f'{ddir}/viterbi_predictions.txt'
+    viterbi_predict(in_tags_filename, trans_probs_filename, output_probs_filename, in_test_filename,
+                    viterbi_predictions_filename)
+    correct, total, acc = evaluate(viterbi_predictions_filename, in_ans_filename)
+    print(f'Viterbi prediction accuracy:   {correct}/{total} = {acc}')
 
     # trans_probs_filename2 =  f'{ddir}/trans_probs2.txt'
     # output_probs_filename2 = f'{ddir}/output_probs2.txt'
