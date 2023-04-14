@@ -137,7 +137,7 @@ def naive_predict2(in_output_probs_filename, in_train_filename, in_test_filename
 Q4a) Considering START and STOP state for trans_probs.txt
 '''
 
-def vitterbi_helper(in_output_probs_filename, in_trans_probs_filename):
+def viterbi_helper(in_output_probs_filename, in_trans_probs_filename):
     output_probs_helper(in_output_probs_filename)
     trans_dict = defaultdict(lambda: defaultdict(float))
     with open("twitter_train.txt", "r", encoding="utf-8") as testdata:
@@ -166,8 +166,6 @@ def vitterbi_helper(in_output_probs_filename, in_trans_probs_filename):
                         trans_dict[tag_i][tag_j] += 1
                         tweet_counter += 1
 
-                print(tweet_counter)
-
                 label_tag_counter["START"] = tweet_counter
                 label_tag_counter["STOP"] = tweet_counter
             
@@ -177,11 +175,12 @@ def vitterbi_helper(in_output_probs_filename, in_trans_probs_filename):
                         trans_probs.write(f"{tag_i}\t{tag_j}\t{prob}\n")
                       
 '''
-Q4b) accuracy = 1034/1378 = 0.7503628447024674
+Q4c) accuracy = 1034/1378 = 0.7503628447024674
 '''
 def viterbi_predict(in_tags_filename, in_trans_probs_filename, in_output_probs_filename, in_test_filename,
                     out_predictions_filename):
-    vitterbi_helper(in_output_probs_filename, in_trans_probs_filename)
+    
+    viterbi_helper(in_output_probs_filename, in_trans_probs_filename)
 
     output_probs_dict = defaultdict(lambda: defaultdict(float))
     trans_probs_dict = defaultdict(lambda: defaultdict(float))
@@ -209,9 +208,8 @@ def viterbi_predict(in_tags_filename, in_trans_probs_filename, in_output_probs_f
                 if not line.isspace(): #gathering all tokens of one tweet in a list
                     tokens.append(line.strip())
                 else: #when the end of the tweet is reached
-                    #range(0, 3 + 1)
-                    for index in range(0, len(tokens) + 1): #processing all the words in the tweet
-                        if index <= len(tokens) - 1: #index <= 3-1
+                    for index in range(0, len(tokens) + 1): #processing all the tokens in the tweet
+                        if index <= len(tokens) - 1:
                             token = tokens[index]
                             trans_prob = 0
                             output_prob = 0
@@ -279,15 +277,189 @@ def viterbi_predict(in_tags_filename, in_trans_probs_filename, in_output_probs_f
                             BP = defaultdict(lambda: defaultdict(float)) #reset
                             tokens = [] #reset
 
+'''
+Q5a) Observations we have made from twitter.txt:
+    1. By ignoring capitalisation, it can increase the accuracy of the model. For example, "yeah", "Yeah" and "YEAH" all appears in the
+     twitter_train.txt with the tag "!". Therefore, we can consolidate these into one probability under "yeah" so improve the prediction of the token
+     with the tag "!".
 
+     2. We observe that for this data, users are all defined as "@USER_XXXXX" with the text after the underscore being the unique ID to each user.
+     But since every user should be tagged with "@", we can ignore the unique ID and check if the token starts with "@" as this will mean that the tag would
+     also be "@". Furthermore, we observe that even the word "@" is tagged with "@" so there is not a need to check the subsequent characters. 
+
+     3. All urls can be detected by checking if the token starts with "http". Thus, any token that starts with "http" has to be tagged with "U" and we can
+     disregard all the characters afterwards.
+
+     4. All retweets have a token "RT" and the tag "~". Thus, any token that is "RT" can be given the tag "~".
+
+     If the above conditions are met, we will assign these tags with a probability of 1 in the pi matrix because we will need this state to have the maximum 
+     probability when generating the pi value for the next token's tags so that the tag will be "selected" as a backpointer.
+
+Q5c) accuracy = 1108/1378 = 0.8040638606676342
 '''
-to be done
-'''
+##### Recompute the inital output probability by lower casing every token
+
+label_tag_counter_new = defaultdict(float) #dict where {tag: count}
+label_tag_token_new = defaultdict(lambda: defaultdict(float)) #dict where {tag:{token: count}}
+label_token_new = defaultdict(float) #dict where {token: count}
+unseen_token_tag_prob_new = defaultdict(float) #dict where {tag: probability}
+
+total_num_words_new = 0 #instantiating total number of tokens in training data
+
+with open("twitter_train.txt", 'r', encoding="utf-8") as inputfile:
+    for line in inputfile: #from training data, populate the first 3 dicts
+        if not line.isspace():
+            token, tag = line.strip().split('\t')
+            
+            ##### change all token to lower case
+            token = token.lower()
+            
+            label_tag_counter_new[tag] += 1
+            label_tag_token_new[tag][token] += 1
+            label_token_new[token] += 1
+
+    total_num_words_new = len(label_token_new)
+
+    for tag, tag_value in label_tag_counter_new.items(): #populate 4th dict, probability of each tag for all unseen tokens
+        prob = delta/(tag_value + delta * (total_num_words_new + 1))
+        unseen_token_tag_prob_new[tag] = prob
+       
+def output_probs_helper2(in_output_probs_filename):
+    with open(in_output_probs_filename, 'w', encoding="utf-8") as outputfile:
+        for tag, tag_value in label_tag_counter_new.items():
+            for token, token_value in label_tag_token_new[tag].items():
+                prob = (token_value + delta) / (tag_value + delta * (total_num_words_new + 1))
+                outputfile.write(f"{tag}\t{token}\t{prob}\n")
+
 def viterbi_predict2(in_tags_filename, in_trans_probs_filename, in_output_probs_filename, in_test_filename,
-                     out_predictions_filename):
-    pass
+                    out_predictions_filename):
 
+    ##### override the old output_probs txt with lowercases token probabilities
+    viterbi_helper(in_output_probs_filename, in_trans_probs_filename)
+    output_probs_helper2(in_output_probs_filename)
 
+    output_probs_dict = defaultdict(lambda: defaultdict(float))
+    trans_probs_dict = defaultdict(lambda: defaultdict(float))
+
+    with open(in_output_probs_filename, 'r', encoding="utf-8") as probinputfile:
+        for line in probinputfile:
+            tag, token, prob = line.strip().split('\t')
+            output_probs_dict[token][tag] = float(prob)
+
+    with open(in_trans_probs_filename, "r", encoding="utf-8") as transinputfile:
+        for line in transinputfile:
+            tag_i, tag_j, prob = line.strip().split("\t")
+            trans_probs_dict[tag_i][tag_j] = float(prob)
+    
+    with open(in_tags_filename, "r", encoding="utf-8") as tagsfile:
+        tag_list = tagsfile.read().split()
+    
+    with open(in_test_filename, "r", encoding="utf-8") as testdata:
+        with open(out_predictions_filename, "w", encoding="utf-8") as outputfile:
+            pi = defaultdict(lambda: defaultdict(float))
+            BP = defaultdict(lambda: defaultdict(float))
+            tokens = []
+
+            for line in testdata:
+                if not line.isspace(): #gathering all tokens of one tweet in a list
+                    tokens.append(line.strip())
+                else: #when the end of the tweet is reached
+                    for index in range(0, len(tokens) + 1): #processing all the tokens in the tweet
+                        if index <= len(tokens) - 1:
+                            token = tokens[index].lower() ##### change the incoming tokens to lowercases as well
+                            trans_prob = 0
+                            output_prob = 0
+                            if index == 0: #for the first word of the tweet
+                                for tag_j in tag_list:
+                                    if tag_j in trans_probs_dict["START"]:
+                                        trans_prob = trans_probs_dict["START"][tag_j]
+                                    else:
+                                        trans_prob = delta / (label_tag_counter["START"] + delta * (total_num_words + 1))
+                                    if token in output_probs_dict:
+                                        output_prob = output_probs_dict[token][tag_j]
+                                    else:
+                                        output_prob = delta / (label_tag_counter[tag_j] + delta * (total_num_words + 1))
+                                    prob = trans_prob * output_prob
+
+                                    ##### check if token was @user_XXXX
+                                    if token[0] == "@" and tag_j == "@":
+                                        pi[index + 1]["@"] = 1
+                                        BP[index + 1]["@"] = "*"
+                                    ##### check if url
+                                    elif (len(token) > 4 and token[:4] == "http") and tag_j == "U":
+                                        pi[index + 1]["U"] = 1
+                                        BP[index + 1]["U"] = "*"
+                                    ##### check if retweet
+                                    elif token == "rt" and tag_j == "~":
+                                        pi[index + 1]["~"] = 1
+                                        BP[index + 1]["~"] = "*"
+                                    else: 
+                                        pi[index + 1][tag_j] = prob
+                                        BP[index + 1][tag_j] = "*"
+
+                            else: #for every other word in between including last word
+                                for tag_j in tag_list:
+                                    find_max = defaultdict(float)
+                                    for tag_i in tag_list:
+                                        prev_prob = pi[index][tag_i]
+                                        if tag_j in trans_probs_dict[tag_i]:
+                                            trans_prob = trans_probs_dict[tag_i][tag_j]
+                                        else:
+                                            trans_prob = delta / (label_tag_counter[tag_i] + delta * (total_num_words + 1))
+                                        if token in output_probs_dict:
+                                            output_prob = output_probs_dict[token][tag_j]
+                                        else:
+                                            output_prob = delta / (label_tag_counter[tag_j] + delta * (total_num_words + 1))
+                                        prob = prev_prob * trans_prob * output_prob
+                                        find_max[tag_i] = prob
+                                    max_tag_i = max(find_max, key = find_max.get)
+                                    max_prob = find_max[max_tag_i]
+                                    
+                                    ##### check if token was @user_XXXX
+                                    if token[0] == "@" and tag_j == "@":
+                                        pi[index + 1]["@"] = 1
+                                        BP[index + 1]["@"] = max_tag_i
+                                    #### check if token is url
+                                    elif (len(token) > 4 and token[:4] == "http") and tag_j == "U":
+                                        pi[index + 1]["U"] = 1
+                                        BP[index + 1]["U"] = max_tag_i
+                                    #### check if retweet
+                                    elif token == "rt" and tag_j == "~":
+                                        pi[index + 1]["~"] = 1
+                                        BP[index + 1]["~"] = max_tag_i
+                                    else: 
+                                        pi[index + 1][tag_j] = max_prob
+                                        BP[index + 1][tag_j] = max_tag_i
+                        
+                        else: #for the stop state
+                            find_max = defaultdict(float)
+                            for tag_i in tag_list:
+                                prev_prob = pi[index][tag_i]
+                                if "STOP" in trans_probs_dict[tag_i]:
+                                    trans_prob = trans_probs_dict[tag_i]["STOP"]
+                                else:
+                                    trans_prob = delta / (label_tag_counter[tag_i] + delta * (total_num_words + 1))
+                                prob = prev_prob * trans_prob
+                                find_max[tag_i] = prob
+                            final_BP = max(find_max, key=find_max.get)
+                            max_prob = find_max[final_BP]
+
+                            sequence = []
+                            sequence.append(final_BP)
+                            for i in reversed(range(1, index + 1)):
+                                tag = BP[i][final_BP]
+                                if tag == "*":
+                                    continue
+                                sequence.append(tag)
+                                final_BP = tag
+                            sequence.reverse()
+                            for tag in sequence:
+                                outputfile.write(f"{tag}\n")
+                            outputfile.write("\n")
+
+                            pi = defaultdict(lambda: defaultdict(float)) #reset
+                            BP = defaultdict(lambda: defaultdict(float)) #reset
+                            tokens = [] #reset
 
 def evaluate(in_prediction_filename, in_answer_filename):
     """Do not change this method"""
@@ -302,8 +474,6 @@ def evaluate(in_prediction_filename, in_answer_filename):
     for pred, truth in zip(predicted_tags, ground_truth_tags):
         if pred == truth: correct += 1
     return correct, len(predicted_tags), correct/len(predicted_tags)
-
-
 
 def run():
     '''
@@ -322,15 +492,15 @@ def run():
     in_test_filename = f'{ddir}/twitter_dev_no_tag.txt'
     in_ans_filename  = f'{ddir}/twitter_dev_ans.txt'
 
-    # naive_prediction_filename = f'{ddir}/naive_predictions.txt'
-    # naive_predict(naive_output_probs_filename, in_test_filename, naive_prediction_filename)
-    # correct, total, acc = evaluate(naive_prediction_filename, in_ans_filename)
-    # print(f'Naive prediction accuracy:     {correct}/{total} = {acc}')
+    naive_prediction_filename = f'{ddir}/naive_predictions.txt'
+    naive_predict(naive_output_probs_filename, in_test_filename, naive_prediction_filename)
+    correct, total, acc = evaluate(naive_prediction_filename, in_ans_filename)
+    print(f'Naive prediction accuracy:     {correct}/{total} = {acc}')
 
-    # naive_prediction_filename2 = f'{ddir}/naive_predictions2.txt'
-    # naive_predict2(naive_output_probs_filename, in_train_filename, in_test_filename, naive_prediction_filename2)
-    # correct, total, acc = evaluate(naive_prediction_filename2, in_ans_filename)
-    # print(f'Naive prediction2 accuracy:    {correct}/{total} = {acc}')
+    naive_prediction_filename2 = f'{ddir}/naive_predictions2.txt'
+    naive_predict2(naive_output_probs_filename, in_train_filename, in_test_filename, naive_prediction_filename2)
+    correct, total, acc = evaluate(naive_prediction_filename2, in_ans_filename)
+    print(f'Naive prediction2 accuracy:    {correct}/{total} = {acc}')
 
     trans_probs_filename =  f'{ddir}/trans_probs.txt'
     output_probs_filename = f'{ddir}/output_probs.txt'
@@ -342,16 +512,14 @@ def run():
     correct, total, acc = evaluate(viterbi_predictions_filename, in_ans_filename)
     print(f'Viterbi prediction accuracy:   {correct}/{total} = {acc}')
 
-    # trans_probs_filename2 =  f'{ddir}/trans_probs2.txt'
-    # output_probs_filename2 = f'{ddir}/output_probs2.txt'
+    trans_probs_filename2 =  f'{ddir}/trans_probs2.txt'
+    output_probs_filename2 = f'{ddir}/output_probs2.txt'
 
-    # viterbi_predictions_filename2 = f'{ddir}/viterbi_predictions2.txt'
-    # viterbi_predict2(in_tags_filename, trans_probs_filename2, output_probs_filename2, in_test_filename,
-    #                  viterbi_predictions_filename2)
-    # correct, total, acc = evaluate(viterbi_predictions_filename2, in_ans_filename)
-    # print(f'Viterbi2 prediction accuracy:  {correct}/{total} = {acc}')
+    viterbi_predictions_filename2 = f'{ddir}/viterbi_predictions2.txt'
+    viterbi_predict2(in_tags_filename, trans_probs_filename2, output_probs_filename2, in_test_filename,
+                     viterbi_predictions_filename2)
+    correct, total, acc = evaluate(viterbi_predictions_filename2, in_ans_filename)
+    print(f'Viterbi2 prediction accuracy:  {correct}/{total} = {acc}')
 
-    
-    
 if __name__ == '__main__':
     run()
